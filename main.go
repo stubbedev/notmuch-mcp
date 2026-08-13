@@ -53,7 +53,7 @@ type showArgs struct {
 	Query        string `json:"query" jsonschema:"notmuch query selecting the messages to read; id:<message-id> reads one message"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"max messages to return (default 20)"`
 	EntireThread bool   `json:"entire_thread,omitempty" jsonschema:"include every message in the matching threads, not just the matches"`
-	IncludeHTML  bool   `json:"include_html,omitempty" jsonschema:"include HTML parts when a message has no plain-text alternative (verbose)"`
+	IncludeHTML  bool   `json:"include_html,omitempty" jsonschema:"also render the HTML part when the message already has a plain-text body; use when that body looks like a stub. HTML-only messages are rendered automatically"`
 	MaxBodyChars int    `json:"max_body_chars,omitempty" jsonschema:"truncate each body to this many bytes (default 4000, 0 for unlimited)"`
 }
 
@@ -110,9 +110,12 @@ func addTools(s *mcp.Server) {
 		if err := checkQuery(a.Query); err != nil {
 			return nil, nil, err
 		}
+		// Always fetch HTML parts — they stay inside this process, and a message
+		// with no plain-text alternative needs them to have any body at all.
+		// Whether they reach the model is decided when flattening.
 		raw, err := run(ctx, "show", "--format=json",
 			"--entire-thread="+strconv.FormatBool(a.EntireThread),
-			"--include-html="+strconv.FormatBool(a.IncludeHTML),
+			"--include-html=true",
 			"--body=true", "--limit="+strconv.Itoa(limitOr(a.Limit)),
 			"--", a.Query)
 		if err != nil {

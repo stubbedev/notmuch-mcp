@@ -125,17 +125,33 @@ func toMessage(m map[string]any, includeHTML bool, maxBody int) Message {
 			msg.Tags = append(msg.Tags, str(t))
 		}
 	}
-	var body strings.Builder
-	collectParts(m["body"], includeHTML, &body, &msg.Attachments)
-	msg.Body = truncate(strings.TrimSpace(body.String()), maxBody)
+	var plain, htmlRaw strings.Builder
+	collectParts(m["body"], &plain, &htmlRaw, &msg.Attachments)
+
+	body := strings.TrimSpace(plain.String())
+	// Plenty of mail is HTML-only; without this its body reads as empty. The
+	// markdown rendering is also what include_html asks for — raw markup would
+	// spend the whole budget on <td style="…"> before reaching a sentence.
+	if h := htmlRaw.String(); h != "" && (body == "" || includeHTML) {
+		switch rendered := htmlToMarkdown(h, wrapWidth()); {
+		case rendered == "":
+		case body == "":
+			body = rendered
+		default:
+			body += "\n\n--- rendered HTML ---\n\n" + rendered
+		}
+	}
+	msg.Body = truncate(body, maxBody)
 	return msg
 }
 
-func collectParts(n any, includeHTML bool, body *strings.Builder, atts *[]Attachment) {
+// collectParts splits a MIME tree into its plain-text body, its raw HTML body
+// and the parts that carry a filename.
+func collectParts(n any, plain, htmlRaw *strings.Builder, atts *[]Attachment) {
 	switch v := n.(type) {
 	case []any:
 		for _, c := range v {
-			collectParts(c, includeHTML, body, atts)
+			collectParts(c, plain, htmlRaw, atts)
 		}
 	case map[string]any:
 		// Any part carrying a filename is listed, whatever its MIME type —
@@ -153,12 +169,15 @@ func collectParts(n any, includeHTML bool, body *strings.Builder, atts *[]Attach
 		ct := strings.ToLower(str(v["content-type"]))
 		s, isText := v["content"].(string)
 		if !isText {
-			collectParts(v["content"], includeHTML, body, atts)
+			collectParts(v["content"], plain, htmlRaw, atts)
 			return
 		}
-		if strings.HasPrefix(ct, "text/plain") || (includeHTML && strings.HasPrefix(ct, "text/")) {
-			body.WriteString(s)
-			body.WriteString("\n")
+		switch {
+		case strings.HasPrefix(ct, "text/html"):
+			htmlRaw.WriteString(s)
+		case strings.HasPrefix(ct, "text/"):
+			plain.WriteString(s)
+			plain.WriteString("\n")
 		}
 	}
 }
@@ -320,4 +339,15 @@ func truncate(s string, limit int) string {
 func str(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// wrapWidth is the hard-wrap column for rendered HTML. Matches html-to-md's
+// default; override for a client that prefers longer lines.
+func wrapWidth() int {
+	if v := os.Getenv("NOTMUCH_MCP_WRAP_WIDTH"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 40 && n <= 240 {
+			return n
+		}
+	}
+	return defaultWrapWidth
 }

@@ -223,3 +223,7 @@ release-preview:
     echo "  major: v$((MAJOR + 1)).0.0"
     echo "  minor: v${MAJOR}.$((MINOR + 1)).0"
     echo "  patch: v${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+# Regenerate testdata/*.golden from the current converter (review the diff!)
+golden:
+    go test -run TestGolden -update .

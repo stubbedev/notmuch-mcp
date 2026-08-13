@@ -61,8 +61,34 @@ Or in an `mcpServers` config block:
 | `notmuch_tag`    | Adds and/or removes tags on every message matching a query. The only write.                       |
 
 `notmuch_show` flattens notmuch's nested thread/MIME JSON down to the headers,
-the text body and an attachment list. HTML parts are skipped unless you pass
-`include_html` — otherwise a single marketing mail would eat the context window.
+the text body and an attachment list.
+
+### HTML mail
+
+A message with no plain-text alternative used to read as an empty body. Its HTML
+is now rendered to Markdown in-process, and `include_html` renders the HTML for
+messages whose plain-text part is a stub ("view this in your browser").
+
+The renderer is a Go port of [stubbedev/html-to-md](https://github.com/stubbedev/html-to-md),
+an aerc `text/html` filter. It is mail-specific rather than general-purpose:
+Outlook conditionals, `display:none` responsive duplicates, layout tables,
+decorative anchors and zero-width preview padding are all stripped before
+serialisation. On a sample of real inbox HTML it produced **15%** of the raw
+bytes, against 27% for a general-purpose HTML→Markdown library — the difference
+is the noise a faithful converter is obliged to keep.
+
+The port is byte-for-byte identical to the Rust original: `TestParityWithRust`
+pipes every fixture through both and compares, and it was validated the same way
+against 620 real messages. It skips where `html-to-md` isn't installed, with
+`testdata/*.golden` guarding the behaviour there. Point `CORPUS` at a directory
+of dumped HTML parts to re-run parity against your own mail:
+
+```sh
+CORPUS=/tmp/mail-html go test -run TestParityWithRust .
+```
+
+Bodies wrap at 80 columns (`NOTMUCH_MCP_WRAP_WIDTH`) and truncate at
+`max_body_chars`, so the cap now spends its budget on prose instead of markup.
 
 ### Attachments
 

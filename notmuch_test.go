@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,8 +55,13 @@ func TestFlattenIncludeHTML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if msgs[0].Body != "hello there\n<p>hello there</p>" {
-		t.Errorf("body = %q, want plain + html", msgs[0].Body)
+	// include_html appends the rendered HTML after the plain body, never raw markup.
+	body := msgs[0].Body
+	if !strings.HasPrefix(body, "hello there\n\n--- rendered HTML ---\n\n") {
+		t.Errorf("body = %q, want plain body then rendered HTML", body)
+	}
+	if strings.Contains(body, "<p>") {
+		t.Errorf("body leaked raw HTML: %q", body)
 	}
 }
 
@@ -122,5 +128,34 @@ func TestCheckQuery(t *testing.T) {
 	}
 	if err := checkQuery("tag:inbox"); err != nil {
 		t.Errorf("valid query rejected: %v", err)
+	}
+}
+
+// A message whose only body is HTML: without rendering, its body is empty.
+const htmlOnlyJSON = `[[[
+{"id":"c@example.com","tags":["inbox"],
+ "body":[{"id":1,"content-type":"text/html",
+   "content":"<html><head><style>p{color:red}</style></head><body><h1>Invoice 42</h1><p>Due <b>friday</b>.</p></body></html>"}],
+ "headers":{"Subject":"Invoice 42","From":"billing@example.com"}},[]]]]`
+
+func TestFlattenHTMLOnlyIsRendered(t *testing.T) {
+	msgs, err := flatten([]byte(htmlOnlyJSON), false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := msgs[0].Body
+	if body == "" {
+		t.Fatal("HTML-only message rendered an empty body")
+	}
+	for _, want := range []string{"Invoice 42", "friday"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body %q is missing %q", body, want)
+		}
+	}
+	// Markup and CSS must not survive into the model's context.
+	for _, bad := range []string{"<h1", "<p>", "color:red", "<style"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("body %q leaked %q", body, bad)
+		}
 	}
 }
