@@ -150,7 +150,14 @@ _release-checks:
     #!/usr/bin/env bash
     set -euo pipefail
     BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||' || echo master)
+    DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
+    # A fresh clone has no origin/HEAD symref, and an unresolved one reports
+    # the literal "HEAD" — ask the remote once before falling back.
+    if [ -z "$DEFAULT_BRANCH" ] || [ "$DEFAULT_BRANCH" = "HEAD" ]; then
+        git remote set-head origin -a >/dev/null 2>&1 || true
+        DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
+        DEFAULT_BRANCH=${DEFAULT_BRANCH:-master}
+    fi
     if [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
         echo "Error: Not on default branch '$DEFAULT_BRANCH' (currently on '$BRANCH')." >&2
         exit 1
