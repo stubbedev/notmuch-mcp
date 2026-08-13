@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // A trimmed but structurally real `notmuch show --format=json` payload: a
 // thread whose top-level message has one reply, a multipart/alternative body,
@@ -32,8 +35,11 @@ func TestFlatten(t *testing.T) {
 	if m.Body != "hello there" {
 		t.Errorf("body = %q, want %q (html part must be skipped)", m.Body, "hello there")
 	}
-	if len(m.Attachments) != 1 || m.Attachments[0] != "invoice.pdf" {
-		t.Errorf("attachments = %v, want [invoice.pdf]", m.Attachments)
+	if len(m.Attachments) != 1 {
+		t.Fatalf("attachments = %v, want 1", m.Attachments)
+	}
+	if a := m.Attachments[0]; a.Filename != "invoice.pdf" || a.Part != 5 || a.ContentType != "application/pdf" || a.Bytes != 9001 {
+		t.Errorf("attachment = %+v, want invoice.pdf part 5 application/pdf 9001 bytes", a)
 	}
 	if len(m.Tags) != 2 || m.Tags[0] != "inbox" {
 		t.Errorf("tags = %v", m.Tags)
@@ -70,6 +76,43 @@ func TestCheckTag(t *testing.T) {
 	}
 	if err := checkTag("to-read/2026"); err != nil {
 		t.Errorf("checkTag rejected a valid tag: %v", err)
+	}
+}
+
+// MIME filenames come from whoever sent the mail, so they are hostile input.
+func TestSafeName(t *testing.T) {
+	cases := map[string]string{
+		"invoice.pdf":                "invoice.pdf",
+		"../../.ssh/authorized_keys": "authorized_keys",
+		"/etc/passwd":                "passwd",
+		`..\..\windows\system32`:     "system32",
+		"":                           "part-3",
+		"..":                         "part-3",
+		".":                          "part-3",
+		".bashrc":                    "part-3.bashrc", // no writing dotfiles
+		"a\x00b/c.txt":               "c.txt",
+		"with\nnewline.txt":          "with_newline.txt",
+	}
+	for in, want := range cases {
+		if got := safeName(in, 3); got != want {
+			t.Errorf("safeName(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Whatever the input, the result is always a single path element.
+	for in := range cases {
+		got := safeName(in, 3)
+		if filepath.Dir(filepath.Join("/base", got)) != "/base" {
+			t.Errorf("safeName(%q) = %q escapes its directory", in, got)
+		}
+	}
+}
+
+func TestExtractPartRejectsBadInput(t *testing.T) {
+	if _, _, err := extractPart(t.Context(), "", 1, ""); err == nil {
+		t.Error("empty message_id must be rejected")
+	}
+	if _, _, err := extractPart(t.Context(), "a@b", 0, ""); err == nil {
+		t.Error("part 0 must be rejected")
 	}
 }
 

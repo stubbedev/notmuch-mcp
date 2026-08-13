@@ -57,6 +57,12 @@ type showArgs struct {
 	MaxBodyChars int    `json:"max_body_chars,omitempty" jsonschema:"truncate each body to this many bytes (default 4000, 0 for unlimited)"`
 }
 
+type extractArgs struct {
+	MessageID string `json:"message_id" jsonschema:"the message's Message-ID, as returned in notmuch_show's id field (without the id: prefix)"`
+	Part      int    `json:"part" jsonschema:"the part number from notmuch_show's attachments list"`
+	Filename  string `json:"filename,omitempty" jsonschema:"name to save as; defaults to the attachment's own filename"`
+}
+
 type countArgs struct {
 	Query  string `json:"query" jsonschema:"notmuch query to count"`
 	Output string `json:"output,omitempty" jsonschema:"messages (default), threads or files"`
@@ -97,8 +103,9 @@ func addTools(s *mcp.Server) {
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "notmuch_show",
-		Description: "Read messages matching a query. Returns flattened messages: headers, tags, plain-text body and attachment filenames. Attachment payloads are never returned.",
+		Name: "notmuch_show",
+		Description: "Read messages matching a query. Returns flattened messages: headers, tags, plain-text body, and an attachments list (part number, filename, type, size). " +
+			"Attachment bytes are never returned inline — call notmuch_extract with the part number to write one to disk.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, a showArgs) (*mcp.CallToolResult, any, error) {
 		if err := checkQuery(a.Query); err != nil {
 			return nil, nil, err
@@ -124,6 +131,19 @@ func addTools(s *mcp.Server) {
 			return nil, nil, err
 		}
 		return text(string(buf)), nil, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "notmuch_extract",
+		Description: "Write one attachment (any file type — PDF, image, zip, spreadsheet, anything) to a file on disk and return its path. " +
+			"The bytes go to disk, not through this conversation, so read or process the returned path with your own file tools. " +
+			"Get message_id and part from notmuch_show's attachments list.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, a extractArgs) (*mcp.CallToolResult, any, error) {
+		path, n, err := extractPart(ctx, a.MessageID, a.Part, a.Filename)
+		if err != nil {
+			return nil, nil, err
+		}
+		return text(fmt.Sprintf("wrote %d bytes to %s", n, path)), nil, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
