@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          COMMIT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          LDFLAGS="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}"
+
+          STAGE="notmuch-mcp-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "dist/$STAGE"
+
+          env CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath -ldflags "$LDFLAGS" -o "dist/$STAGE/notmuch-mcp" .
+
+          cp README.md LICENSE "dist/$STAGE/" 2>/dev/null || true
+
+          cd dist
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+          shasum -a 256 "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          rm -rf "$STAGE"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/notmuch-mcp-*.tar.gz*
+          retention-days: 7
+
+  cache:
+    name: push nix build to xilo
+    # Build the nix package for this tag and push its closure to the self-hosted
+    # xilo cache, so `nix run` / flake consumers pull a prebuilt binary instead
+    # of recompiling. Independent of the Go release artifacts above.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/flake.lock', '**/go.sum') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
+
+      - name: Build package
+        run: nix build .#notmuch-mcp -L --print-out-paths | tee /tmp/outpaths
+
+      - name: setup xilo
+        uses: stubbedev/xilo@v1
+        with:
+          url: https://nix.stubbe.dev
+          cache: default
+          token: ${{ secrets.XILO_TOKEN }}
+
+      - name: Push to xilo
+        # Best-effort: a cache-push failure must not redden a release.
+        continue-on-error: true
+        run: xilo push default $(cat /tmp/outpaths)
+
+  release:
+    name: publish github release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Aggregate checksums.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          cat *.sha256 > checksums.txt
+          ls -la
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}

@@ -1,0 +1,252 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# Collapse the duplicate push + pull_request runs for the same commit into one,
+# and cancel a superseded run when a branch is force-pushed.
+concurrency:
+  group: ci-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  autofix:
+    # Auto-correct mechanically-fixable issues (gofmt + golangci-lint --fix) and
+    # push the result back, so the jobs below validate the fixed tree. Skipped on
+    # bot commits (loop guard) and on fork PRs, where pushing back is impossible.
+    if: github.event.pusher.name != 'github-actions[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      pushed_sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Check out the branch, not a detached HEAD, so `git push` has a target.
+          ref: ${{ github.head_ref || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt -w
+        run: gofmt -w .
+
+      - name: golangci-lint --fix
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --fix
+        continue-on-error: true
+
+      - name: Commit and push fixes
+        id: commit
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No auto-fixable issues found."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m "style: auto-fix gofmt and golangci-lint issues [skip ci]"
+          git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "::notice::CI auto-fixed formatting/lint issues and pushed commit $(git rev-parse --short HEAD)."
+
+  test:
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Immutable SHA (autofix's commit if any) so this job can't fail at
+          # checkout when auto-merge deletes the branch mid-run.
+          ref: ${{ needs.autofix.outputs.pushed_sha || github.sha }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Check gofmt
+        run: |
+          out=$(gofmt -l $(go list -f '{{.Dir}}' ./...))
+          if [ -n "$out" ]; then
+            echo "Unformatted files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # The unit tests parse recorded notmuch output; they never shell out, so
+      # no notmuch installation is needed here.
+      - name: Test (with race detector)
+        run: go test -race ./...
+
+  lint:
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.autofix.outputs.pushed_sha || github.sha }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+  smoke:
+    # End-to-end: drive the real binary over stdio against a throwaway notmuch
+    # database. Catches broken notmuch invocations that unit tests can't.
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.autofix.outputs.pushed_sha || github.sha }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # `just` isn't packaged for ubuntu noble, so call the script directly —
+      # `just smoke` runs the same scripts/smoke.sh.
+      - name: Install notmuch
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y notmuch
+
+      - name: Build
+        run: go build -o notmuch-mcp .
+
+      - name: Smoke test
+        run: ./scripts/smoke.sh ./notmuch-mcp
+
+  nix:
+    needs: autofix
+    if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Immutable SHA so the job survives a mid-run branch delete. The master
+          # auto-bump step pushes `HEAD:master` explicitly, so it works from this
+          # (possibly detached) checkout; the write token is still required.
+          ref: ${{ needs.autofix.outputs.pushed_sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/flake.lock', '**/go.sum') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+          gc-max-store-size-linux: 5G
+
+      # Inline `just sync-flake`: rewrite flake.nix's vendorHash to match the
+      # current go.sum. On master pushes the result is auto-committed (next
+      # step); on PRs we fail if it would change anything, so reviewers see the
+      # drift instead of CI silently masking it.
+      - name: sync flake.nix vendorHash
+        run: |
+          set -euo pipefail
+          GO_SUM_HASH=$(sha256sum go.sum | awk '{print $1}')
+          SENTINEL="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$SENTINEL"'";|' flake.nix
+          set +e
+          OUT=$(nix build .#notmuch-mcp --no-link 2>&1)
+          BUILD_STATUS=$?
+          set -e
+          NEW_HASH=$(printf '%s\n' "$OUT" | awk '/got:[[:space:]]*sha256-/ {print $2; exit}')
+          if [ -z "$NEW_HASH" ]; then
+            if [ "$BUILD_STATUS" = "0" ]; then
+              echo "::error::sync-flake: nix build unexpectedly succeeded with sentinel hash"
+              echo "$OUT"
+              exit 1
+            fi
+            echo "$OUT"
+            echo "::error::sync-flake: nix build did not print 'got: sha256-…'"
+            exit 1
+          fi
+          sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$NEW_HASH"'";|' flake.nix
+          sed -i -E 's|^(\s*# go-sum:).*|\1 '"$GO_SUM_HASH"'|' flake.nix
+          echo "sync-flake: vendorHash=$NEW_HASH go-sum=$GO_SUM_HASH"
+
+      - name: assert flake.nix in sync (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -n "$(git status --porcelain flake.nix)" ]; then
+            echo "::error::flake.nix vendorHash is out of sync with go.sum. Run 'just sync-flake' locally and commit the result."
+            git --no-pager diff flake.nix
+            exit 1
+          fi
+
+      - name: auto-commit flake.nix bump (master)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          if [ -z "$(git status --porcelain flake.nix)" ]; then
+            echo "flake.nix already in sync; nothing to commit."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add flake.nix
+          git commit -m 'chore: auto-bump flake.nix vendorHash [skip ci]'
+          git push origin HEAD:master
+
+      - run: nix flake check --print-build-logs
+
+      # Push the master build's closure to the self-hosted xilo cache so nix
+      # consumers tracking master pull a prebuilt binary instead of recompiling.
+      # Release tags are cached separately by release.yml.
+      - name: Build package for cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: nix build .#notmuch-mcp -L --print-out-paths | tee /tmp/outpaths
+
+      - name: setup xilo
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: stubbedev/xilo@v1
+        with:
+          url: https://nix.stubbe.dev
+          cache: default
+          token: ${{ secrets.XILO_TOKEN }}
+
+      - name: Push to xilo
+        # Best-effort: a cache-push failure must not redden master CI.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        continue-on-error: true
+        run: xilo push default $(cat /tmp/outpaths)

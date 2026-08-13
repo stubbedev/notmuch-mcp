@@ -1,0 +1,17 @@
+# Build artifacts
+notmuch-mcp
+dist/
+*.exe
+
+# Coverage
+coverage.out
+coverage.html
+
+# Editor / OS
+*.swp
+*~
+.idea/
+.vscode/
+.DS_Store
+result
+result-*
