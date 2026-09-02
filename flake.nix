@@ -25,8 +25,8 @@
             version = version;
             src = self;
 
-            # go-sum: 5e5f63c154afb97401eb59602b7fada43e8df0ca9517aa1fb837f0ef2ff07e72
-            vendorHash = "sha256-fijWXrbjiL2yXG5JqO1EqMpZD/51kmwXJp0B7tI0sAs=";
+            # go-sum: 87385c7381956ba7a1bbbc952e7c9db90b09eedcd011473afc444f9f17364927
+            vendorHash = "sha256-yrFlAxtEbDrpD/maL3zdhgeUQyWZP77/JkxVntbeh4I=";
 
             ldflags = [
               "-s"
