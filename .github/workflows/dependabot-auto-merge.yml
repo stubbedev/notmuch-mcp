@@ -5,8 +5,16 @@ name: dependabot-auto-merge
 # Deliberately a schedule and not `workflow_run` / `pull_request_target`:
 # dependabot PRs get a read-only GITHUB_TOKEN on `pull_request`, so nothing
 # running in the PR's own context can merge them. A scheduled run executes in
-# the default-branch context with a write token, so this needs no PAT, no
-# ruleset, and no hardcoded list of CI workflow names.
+# the default-branch context with a write token, so this needs no PAT and no
+# ruleset.
+#
+# The merge itself is a plain `git push` over an SSH deploy key, never
+# `gh pr merge`: GITHUB_TOKEN is a GitHub App token, and the API flatly refuses
+# to let an App write .github/workflows/** ("refusing to allow a GitHub App to
+# create or update workflow ... without `workflows` permission") — which is
+# exactly what a github-actions version bump is. No `permissions:` key can grant
+# that, so an action bump could never merge itself. A deploy key is not an App
+# and carries no such restriction.
 #
 # Whatever CI actually rejects stays open for a human — that is the point.
 
@@ -18,13 +26,26 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  # Needed to dispatch the hash-maintenance workflow after a merge.
-  actions: write
+
+# Never let a dispatched run race a scheduled one onto the default branch.
+concurrency:
+  group: dependabot-auto-merge
+  cancel-in-progress: false
 
 jobs:
   merge:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # Rewrites `origin` to SSH and installs the deploy key, so every
+          # `git push` below is authenticated as the key rather than as the
+          # Actions App. Pushes made this way also trigger the `push` workflows,
+          # which GITHUB_TOKEN pushes do not — so CI reruns on the default
+          # branch after a merge and re-syncs flake.nix's vendorHash by itself.
+          ssh-key: ${{ secrets.AUTOMERGE_SSH_KEY }}
+
       - name: Merge green dependabot PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -34,6 +55,12 @@ jobs:
 
           prs=$(gh pr list --state open --author "app/dependabot" --json number --jq '.[].number')
           [ -n "$prs" ] || { echo "No open dependabot PRs."; exit 0; }
+
+          base=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          failed=0
 
           for pr in $prs; do
             # `cancel-in-progress` concurrency leaves CANCELLED rows from
@@ -54,13 +81,57 @@ jobs:
               continue
             fi
 
-            gh pr merge "$pr" --squash --delete-branch
-            echo "::notice::Auto-merged dependabot PR #$pr ($buckets)."
+            head_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+            head_ref=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+            title=$(gh pr view "$pr" --json title --jq .title)
 
-            # The squash push is made with GITHUB_TOKEN, so it does not trigger
-            # the `push` workflows — ci.yml never reran on the default branch and
-            # the flake hash stayed at its pre-bump value, breaking `nix build`
-            # for every consumer. workflow_dispatch is the documented exception:
-            # it fires even from GITHUB_TOKEN.
-            gh workflow run ci.yml --ref "$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
+            # Two attempts: an earlier PR in this same loop (or a CI auto-commit)
+            # may have moved the branch under us, which a second pass resolves.
+            merged=0
+            for attempt in 1 2; do
+              git fetch -q origin "$base" "refs/pull/$pr/head" || true
+              git checkout -q -B "$base" "origin/$base"
+
+              if git merge-base --is-ancestor "origin/$base" "$head_sha"; then
+                # Dependabot rebases its branches, so the head is normally a
+                # fast-forward. Pushing it untouched keeps history linear and
+                # leaves the PR marked *Merged* rather than merely closed,
+                # because its own commits become reachable from the base.
+                push_ref=$head_sha
+              elif git merge -q --squash "$head_sha"; then
+                git commit -q -m "$title (#$pr)" -m "Closes #$pr"
+                push_ref=HEAD
+              else
+                # Only reachable if the base moved since the mergeable check.
+                git merge --abort || true
+                git reset -q --hard "origin/$base"
+                echo "#$pr: conflicts with $base — dependabot will rebase it"
+                merged=skip
+                break
+              fi
+
+              if git push -q origin "$push_ref:refs/heads/$base"; then
+                merged=1
+                break
+              fi
+              echo "#$pr: push to $base rejected (attempt $attempt) — refetching"
+            done
+
+            # A conflict is dependabot's to resolve by rebasing, not a failure.
+            if [ "$merged" = "skip" ]; then
+              continue
+            fi
+
+            if [ "$merged" != "1" ]; then
+              echo "::error::#$pr: could not push the merge to $base"
+              failed=1
+              continue
+            fi
+
+            # Dependabot deletes its own branch once the PR is merged, but not
+            # when the squash fallback merely closed it. Tolerate either state.
+            git push -q origin --delete "$head_ref" 2>/dev/null || true
+            echo "::notice::Auto-merged dependabot PR #$pr ($buckets)."
           done
+
+          exit "$failed"

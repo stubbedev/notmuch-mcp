@@ -5,9 +5,8 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
-  # Dispatched by dependabot-auto-merge.yml after a squash merge: pushes made
-  # with GITHUB_TOKEN do not trigger `push`, so the vendorHash auto-commit
-  # below would never run for an auto-merged dep bump.
+  # Manual reruns. dependabot-auto-merge.yml no longer needs this: it pushes
+  # the merge over an SSH deploy key, and such a push does trigger `push`.
   workflow_dispatch:
 
 # Collapse the duplicate push + pull_request runs for the same commit into one,
