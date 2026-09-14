@@ -1,16 +1,22 @@
 name: CI
 
 on:
+  # Branches are covered by `pull_request`, master by `push`. Listening for both
+  # on every branch fired two runs for one commit and let the concurrency group
+  # below cancel one of them — which left a permanently CANCELLED row in the
+  # PR's check rollup, holding it at UNSTABLE forever. Nothing that waits for a
+  # clean rollup (dependabot's own merge command, GitHub auto-merge) can ever
+  # proceed past that.
   push:
-    branches: ["**"]
+    branches: [master]
   pull_request:
     branches: ["**"]
   # Manual reruns. dependabot-auto-merge.yml no longer needs this: it pushes
   # the merge over an SSH deploy key, and such a push does trigger `push`.
   workflow_dispatch:
 
-# Collapse the duplicate push + pull_request runs for the same commit into one,
-# and cancel a superseded run when a branch is force-pushed.
+# The event split above already means one run per commit; this only guards
+# against a manual re-dispatch racing the push run for the same SHA.
 concurrency:
   group: ci-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
