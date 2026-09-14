@@ -5,6 +5,10 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  # Dispatched by dependabot-auto-merge.yml after a squash merge: pushes made
+  # with GITHUB_TOKEN do not trigger `push`, so the vendorHash auto-commit
+  # below would never run for an auto-merged dep bump.
+  workflow_dispatch:
 
 # Collapse the duplicate push + pull_request runs for the same commit into one,
 # and cancel a superseded run when a branch is force-pushed.
@@ -223,12 +227,12 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           if [ -n "$(git status --porcelain flake.nix)" ]; then
-            echo "::warning::flake.nix vendorHash was stale; this run built with the corrected hash, which is auto-committed on the master push after merge."
+            echo "::warning::flake.nix vendorHash was stale; this run built with the corrected hash, which is auto-committed by the CI run dispatched after merge."
             git --no-pager diff flake.nix
           fi
 
       - name: auto-commit flake.nix bump (master)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: |
           if [ -z "$(git status --porcelain flake.nix)" ]; then
             echo "flake.nix already in sync; nothing to commit."
@@ -246,11 +250,11 @@ jobs:
       # consumers tracking master pull a prebuilt binary instead of recompiling.
       # Release tags are cached separately by release.yml.
       - name: Build package for cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: nix build .#notmuch-mcp -L --print-out-paths | tee /tmp/outpaths
 
       - name: setup xilo
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         uses: stubbedev/xilo@v1
         with:
           url: https://nix.stubbe.dev
@@ -260,5 +264,5 @@ jobs:
       - name: Push to xilo
         # A failed push is not swallowed: it would leave every consumer
         # rebuilding from source, so the step fails the job.
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
         run: xilo push default $(cat /tmp/outpaths)
