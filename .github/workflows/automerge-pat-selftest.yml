@@ -1,0 +1,52 @@
+name: automerge-pat-selftest
+
+# TEMPORARY — delete once it has run green. Proves AUTOMERGE_PAT can do the one
+# thing it exists for: push a change to .github/workflows/**, which every other
+# credential available to CI is refused for. Writes to a throwaway branch and
+# deletes it again; master is never touched.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Verify AUTOMERGE_PAT can write a workflow file
+        env:
+          PAT: ${{ secrets.AUTOMERGE_PAT }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PAT:-}" ]; then
+            echo "::error::AUTOMERGE_PAT is empty."
+            exit 1
+          fi
+
+          scopes=$(curl -sSI -H "Authorization: token $PAT" https://api.github.com/user \
+            | tr -d '\r' | awk -F': ' 'tolower($1)=="x-oauth-scopes"{print $2}')
+          echo "reported scopes: ${scopes:-<none — fine-grained token, judged by the push below>}"
+
+          branch="automerge-pat-selftest-${GITHUB_RUN_ID}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -q -b "$branch"
+          printf '\n# automerge-pat selftest %s\n' "$GITHUB_RUN_ID" >> .github/workflows/ci.yml
+          git commit -q -am "test: AUTOMERGE_PAT workflow-file write check"
+
+          remote="https://x-access-token:$PAT@github.com/$GH_REPO.git"
+          if git push -q "$remote" "HEAD:refs/heads/$branch"; then
+            echo "::notice::AUTOMERGE_PAT can write .github/workflows/** — dependabot action bumps will merge unattended."
+            git push -q "$remote" --delete "$branch"
+          else
+            echo "::error::AUTOMERGE_PAT was refused on a .github/workflows/** push. A classic PAT needs the 'workflow' scope; a fine-grained one needs Workflows: read and write on this repo."
+            exit 1
+          fi
