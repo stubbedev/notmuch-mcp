@@ -14,11 +14,13 @@ name: dependabot-auto-merge
 # create or update workflow ... without `workflows` permission"). No
 # `permissions:` key can grant an App that scope.
 #
-# A github-actions version bump *is* such a write, and nothing this job can
-# authenticate as may land it — the deploy key is rejected too ("refusing to
-# allow an OAuth App ... without `workflow` scope"). Dependabot can: it authored
-# the change. So those PRs are handed back to it with its own merge command,
-# which it honours once CI is green.
+# A github-actions version bump *is* such a write, and the deploy key is
+# rejected for it too ("refusing to allow an OAuth App ... without `workflow`
+# scope"). Only a PAT carrying the `workflow` scope can land one unattended, so
+# an optional AUTOMERGE_PAT secret is used for exactly those PRs; without it
+# they are flagged as a warning for a human to merge. (Handing them to
+# dependabot's own `@dependabot merge` command was tried and does not work here:
+# the comment triggers no Dependabot job at all.)
 #
 # Whatever CI actually rejects stays open for a human — that is the point.
 
@@ -54,6 +56,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          # Optional; only consulted for PRs that touch .github/workflows/**.
+          AUTOMERGE_PAT: ${{ secrets.AUTOMERGE_PAT }}
         run: |
           set -euo pipefail
 
@@ -97,23 +101,19 @@ jobs:
               continue
             fi
 
-            # .github/workflows/** is unwritable by every credential available
-            # here, deploy key included. Ask dependabot to merge its own PR
-            # instead; it has the permission because it opened the PR. The
-            # command is idempotent-by-check so a six-hourly run does not
-            # re-comment while dependabot is still working through it.
+            # The deploy key cannot push .github/workflows/**; a PAT with the
+            # `workflow` scope is the only thing that can. Actions masks the
+            # secret in logs, so carrying it in the push URL is safe here.
+            remote=origin
             files=$(gh pr view "$pr" --json files --jq '.files[].path')
             case "$files" in
               *".github/workflows/"*)
-                comments=$(gh pr view "$pr" --json comments --jq '.comments[].body')
-                case "$comments" in
-                  *"@dependabot squash and merge"*)
-                    echo "#$pr: dependabot already asked to merge — waiting" ;;
-                  *)
-                    gh pr comment "$pr" --body "@dependabot squash and merge"
-                    echo "::notice::#$pr touches .github/workflows/ — handed the merge to dependabot." ;;
-                esac
-                continue ;;
+                if [ -z "${AUTOMERGE_PAT:-}" ]; then
+                  echo "::warning::#$pr changes .github/workflows/ — no credential available here may push that. Merge it yourself, or add an AUTOMERGE_PAT secret (classic PAT, \`workflow\` scope) to automate it."
+                  continue
+                fi
+                remote="https://x-access-token:$AUTOMERGE_PAT@github.com/$GH_REPO.git"
+                ;;
             esac
 
             head_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
@@ -145,7 +145,7 @@ jobs:
                 break
               fi
 
-              if git push -q origin "$push_ref:refs/heads/$base"; then
+              if git push -q "$remote" "$push_ref:refs/heads/$base"; then
                 merged=1
                 break
               fi
@@ -165,7 +165,7 @@ jobs:
 
             # Dependabot deletes its own branch once the PR is merged, but not
             # when the squash fallback merely closed it. Tolerate either state.
-            git push -q origin --delete "$head_ref" 2>/dev/null || true
+            git push -q "$remote" --delete "$head_ref" 2>/dev/null || true
             echo "::notice::Auto-merged dependabot PR #$pr ($buckets)."
           done
 
