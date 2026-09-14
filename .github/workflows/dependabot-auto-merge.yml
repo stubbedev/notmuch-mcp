@@ -1,6 +1,6 @@
 name: dependabot-auto-merge
 
-# Squash-merges dependabot PRs once every check on the head commit is green.
+# Merges dependabot PRs once every check on the head commit is green.
 #
 # Deliberately a schedule and not `workflow_run` / `pull_request_target`:
 # dependabot PRs get a read-only GITHUB_TOKEN on `pull_request`, so nothing
@@ -67,9 +67,10 @@ jobs:
           failed=0
 
           for pr in $prs; do
-            # `cancel-in-progress` concurrency leaves CANCELLED rows from
-            # superseded attempts alongside the real ones, so judge by bucket and
-            # ignore "cancel": a cancelled run always has a newer one behind it.
+            # Judge by bucket and ignore "cancel": a cancelled run always has
+            # a newer one behind it. ci.yml no longer manufactures cancelled
+            # rows (one event per commit), but a force-push during a run still
+            # can, and that must not read as failure.
             buckets=$(gh pr checks "$pr" --json bucket --jq '[.[].bucket]|unique|join(",")' 2>/dev/null || echo "none")
             # GitHub computes mergeability lazily, and every push to the base
             # invalidates it — including the merge of the PR before this one.
