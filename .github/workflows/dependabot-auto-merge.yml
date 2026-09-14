@@ -67,7 +67,18 @@ jobs:
             # superseded attempts alongside the real ones, so judge by bucket and
             # ignore "cancel": a cancelled run always has a newer one behind it.
             buckets=$(gh pr checks "$pr" --json bucket --jq '[.[].bucket]|unique|join(",")' 2>/dev/null || echo "none")
-            mergeable=$(gh pr view "$pr" --json mergeable --jq .mergeable)
+            # GitHub computes mergeability lazily, and every push to the base
+            # invalidates it — including the merge of the PR before this one.
+            # The first query returns UNKNOWN and only kicks the computation
+            # off, so poll instead of parking the PR until the next run.
+            mergeable=UNKNOWN
+            for _ in 1 2 3 4 5 6; do
+              mergeable=$(gh pr view "$pr" --json mergeable --jq .mergeable)
+              if [ "$mergeable" != "UNKNOWN" ]; then
+                break
+              fi
+              sleep 5
+            done
 
             case "$buckets" in
               *fail*)     echo "#$pr: checks failing ($buckets) — leaving for a human"; continue ;;
