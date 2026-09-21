@@ -3,7 +3,7 @@ module github.com/stubbedev/notmuch-mcp
 go 1.26.5
 
 require (
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/net v0.59.0
 )
 
