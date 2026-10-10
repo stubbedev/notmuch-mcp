@@ -133,7 +133,7 @@ func toMessage(m map[string]any, includeHTML bool, maxBody int) Message {
 	// markdown rendering is also what include_html asks for — raw markup would
 	// spend the whole budget on <td style="…"> before reaching a sentence.
 	if h := htmlRaw.String(); h != "" && (body == "" || includeHTML) {
-		switch rendered := htmlToMarkdown(h, wrapWidth()); {
+		switch rendered := htmlToMarkdown(h); {
 		case rendered == "":
 		case body == "":
 			body = rendered
@@ -339,15 +339,4 @@ func truncate(s string, limit int) string {
 func str(v any) string {
 	s, _ := v.(string)
 	return s
-}
-
-// wrapWidth is the hard-wrap column for rendered HTML. Matches html-to-md's
-// default; override for a client that prefers longer lines.
-func wrapWidth() int {
-	if v := os.Getenv("NOTMUCH_MCP_WRAP_WIDTH"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 40 && n <= 240 {
-			return n
-		}
-	}
-	return defaultWrapWidth
 }

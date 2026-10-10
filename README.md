@@ -45,7 +45,6 @@ Or any `mcpServers` config block:
 | `NOTMUCH_CONFIG`                   | notmuch's default                   |
 | `NOTMUCH_MCP_ATTACHMENT_DIR`       | `$XDG_CACHE_HOME/notmuch-mcp/attachments` |
 | `NOTMUCH_MCP_MAX_ATTACHMENT_BYTES` | 100 MB                              |
-| `NOTMUCH_MCP_WRAP_WIDTH`           | 80                                  |
 
 ## Security
 

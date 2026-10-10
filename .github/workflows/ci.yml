@@ -51,7 +51,7 @@ jobs:
       - name: golangci-lint --fix
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.14.0
           args: --fix
         continue-on-error: true
 
@@ -128,7 +128,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.14.0
 
   smoke:
     # End-to-end: drive the real binary over stdio against a throwaway notmuch
