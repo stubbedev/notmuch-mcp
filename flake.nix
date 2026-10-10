@@ -26,7 +26,7 @@
             src = self;
 
             # go-sum: bc83723b11190d05e6864e65e0daaf35bf65033e4cdb00f28dc9bee8a419f2b6
-            vendorHash = "sha256-bBmktHIkmQ0K+jZ9KJLgBBHXQZ/wQXRanQ0qnWOv1Ic=";
+            vendorHash = "sha256-ufk7mPYf3ed4iIxuxl8cZAqqE8YT6w01G+5srs2F9T8=";
 
             ldflags = [
               "-s"
