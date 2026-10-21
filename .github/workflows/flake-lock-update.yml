@@ -1,6 +1,6 @@
 name: flake-lock-update
 
-# Keeps flake.lock current with its inputs (nixpkgs, flake-utils). Runs weekly
+# Keeps flake.lock current with its inputs (nixpkgs, flake-parts). Runs weekly
 # and on demand. Commits straight to master with `[skip ci]`; the next push
 # picks up the new revision and the nix job re-validates against it.
 # Go modules and actions are bumped separately by dependabot.

@@ -95,9 +95,9 @@ test-cover:
 smoke: build
     ./scripts/smoke.sh ./{{BINARY}}
 
-# Keep flake.nix's `vendorHash` aligned with the current go.sum.
+# Keep nix/package.nix's `vendorHash` aligned with the current go.sum.
 #
-# A sha256 of go.sum is cached as a `# go-sum:` line in flake.nix. When it
+# A sha256 of go.sum is cached as a `# go-sum:` line in nix/package.nix. When it
 # matches go.sum on disk, sync-flake returns immediately without running
 # `nix build` — cheap enough to run on every `just check`, so a `go get` can
 # never push a commit that breaks the nix CI job. Pass `--force` to bypass.
@@ -105,14 +105,14 @@ sync-flake force="":
     #!/usr/bin/env bash
     set -euo pipefail
     GO_SUM_HASH=$(sha256sum go.sum | awk '{print $1}')
-    CACHED_HASH=$(awk -F': ' '/^[[:space:]]*#[[:space:]]*go-sum:/ {print $2; exit}' flake.nix | tr -d ' ')
+    CACHED_HASH=$(awk -F': ' '/^[[:space:]]*#[[:space:]]*go-sum:/ {print $2; exit}' nix/package.nix | tr -d ' ')
     if [ "{{force}}" != "--force" ] && [ "$GO_SUM_HASH" = "$CACHED_HASH" ]; then
         echo "sync-flake: up-to-date (go.sum=$GO_SUM_HASH)"
         exit 0
     fi
     echo "sync-flake: refreshing vendorHash"
     SENTINEL="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-    sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$SENTINEL"'";|' flake.nix
+    sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$SENTINEL"'";|' nix/package.nix
     set +e
     OUT=$(nix build .#notmuch-mcp --no-link 2>&1)
     BUILD_STATUS=$?
@@ -128,12 +128,12 @@ sync-flake force="":
         echo "sync-flake: nix build did not print 'got: sha256-…'" >&2
         exit 1
     fi
-    sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$NEW_HASH"'";|' flake.nix
-    sed -i -E 's|^(\s*# go-sum:).*|\1 '"$GO_SUM_HASH"'|' flake.nix
+    sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$NEW_HASH"'";|' nix/package.nix
+    sed -i -E 's|^(\s*# go-sum:).*|\1 '"$GO_SUM_HASH"'|' nix/package.nix
     echo "sync-flake: vendorHash=$NEW_HASH go-sum=$GO_SUM_HASH"
     # Hard guard: never leave the sentinel behind — CI would fail on hash mismatch.
-    if grep -q 'vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="' flake.nix; then
-        echo "sync-flake: refusing to leave sentinel vendorHash in flake.nix" >&2
+    if grep -q 'vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="' nix/package.nix; then
+        echo "sync-flake: refusing to leave sentinel vendorHash in nix/package.nix" >&2
         exit 1
     fi
     nix build .#notmuch-mcp --no-link
@@ -176,8 +176,8 @@ _release-checks:
     fi
     echo "Re-validating nix build against the new lock..."
     just sync-flake --force
-    if [ -n "$(git status --porcelain flake.nix)" ]; then
-        git add flake.nix
+    if [ -n "$(git status --porcelain nix/package.nix)" ]; then
+        git add nix/package.nix
         git commit -m "chore: update vendorHash for release"
     fi
 

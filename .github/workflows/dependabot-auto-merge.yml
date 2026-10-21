@@ -49,7 +49,7 @@ jobs:
           # `git push` below is authenticated as the key rather than as the
           # Actions App. Pushes made this way also trigger the `push` workflows,
           # which GITHUB_TOKEN pushes do not — so CI reruns on the default
-          # branch after a merge and re-syncs flake.nix's vendorHash by itself.
+          # branch after a merge and re-syncs nix/package.nix's vendorHash by itself.
           ssh-key: ${{ secrets.AUTOMERGE_SSH_KEY }}
 
       - name: Merge green dependabot PRs
