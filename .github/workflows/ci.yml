@@ -21,6 +21,9 @@ concurrency:
   group: ci-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   autofix:
     # Auto-correct mechanically-fixable issues (gofmt + golangci-lint --fix) and
@@ -164,6 +167,7 @@ jobs:
     if: always() && (needs.autofix.result == 'success' || needs.autofix.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
+      actions: write
       contents: write
     steps:
       - uses: actions/checkout@v7
