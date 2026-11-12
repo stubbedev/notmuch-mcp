@@ -2,6 +2,7 @@
 {
   perSystem =
     {
+      inputs',
       lib,
       pkgs,
       self',
@@ -12,7 +13,7 @@
     in
     {
       packages = {
-        notmuch-mcp = pkgs.buildGo127Module {
+        notmuch-mcp = (pkgs.buildGoModule.override { go = inputs'.devtools.packages.go; }) {
           pname = "notmuch-mcp";
           inherit version;
           src = lib.fileset.toSource {
